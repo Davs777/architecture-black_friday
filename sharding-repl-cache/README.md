@@ -1,12 +1,12 @@
-# Настройка MongoDB Sharding с репликацией
+# MongoDB Sharding с репликацией и кешированием
 
-## 1. Запуск кластера
+## 1. Запуск системы
 ```bash
-docker compose up -d
+docker compose up -d --build
 ```
+
 ## 2. Инициализация Config Server
-```
-bash
+```bash
 docker exec -it configSrv mongosh --port 27017 --eval 'rs.initiate({
   _id: "config_server",
   configsvr: true,
@@ -14,10 +14,9 @@ docker exec -it configSrv mongosh --port 27017 --eval 'rs.initiate({
 })'
 ```
 
-## 3. Настройка репликации для шардов
-Для Shard1:
-```
-bash
+## 3. Настройка репликации шардов
+Shard1:
+```bash
 docker exec -it shard1_1 mongosh --port 27021 --eval 'rs.initiate({
   _id: "shard1",
   members: [
@@ -27,10 +26,8 @@ docker exec -it shard1_1 mongosh --port 27021 --eval 'rs.initiate({
   ]
 })'
 ```
-
-Для Shard2:
-```
-bash
+Shard2:
+```bash
 docker exec -it shard2_1 mongosh --port 27031 --eval 'rs.initiate({
   _id: "shard2",
   members: [
@@ -41,18 +38,15 @@ docker exec -it shard2_1 mongosh --port 27031 --eval 'rs.initiate({
 })'
 ```
 ## 4. Настройка Mongos Router
-```
-bash
+```bash
 docker exec -it mongos_router mongosh --port 27020 --eval '
 sh.addShard("shard1/shard1_1:27021,shard1_2:27022,shard1_3:27023");
 sh.addShard("shard2/shard2_1:27031,shard2_2:27032,shard2_3:27033");
 sh.enableSharding("somedb");
 sh.shardCollection("somedb.helloDoc", { "_id": "hashed" })'
 ```
-
 ## 5. Генерация тестовых данных
-```
-bash
+```bash
 docker exec -it mongos_router mongosh --port 27020 somedb --eval '
 for (let i = 0; i < 1000; i++) {
   db.helloDoc.insertOne({
@@ -62,21 +56,19 @@ for (let i = 0; i < 1000; i++) {
   })
 }'
 ```
+Проверка кеширования
+Первый запрос (кеш пустой):
 
-Проверка работы
-Статус репликации Shard1:
+```bash
+time curl http://localhost:8080/helloDoc/users
 ```
-bash
-docker exec -it shard1_1 mongosh --port 27021 --eval 'rs.status()'
-```
+Повторный запрос (должен быть быстрее, данные из кеша):
 
-Статус репликации Shard2:
+```bash
+time curl http://localhost:8080/helloDoc/users
 ```
-bash
-docker exec -it shard2_1 mongosh --port 27031 --eval 'rs.status()'
-```
-Проверка распределения данных:
-```
-bash
+Проверка статистики:
+
+```bash
 curl http://localhost:8080/stats
 ```
