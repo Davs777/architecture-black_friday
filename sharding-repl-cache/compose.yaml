@@ -24,9 +24,11 @@ services:
         "27017"
       ]
     healthcheck:
-      test: [ "CMD", "mongo", "--eval", "db.adminCommand('ping')" ]
+      test: ["CMD", "mongo", "--port", "27017", "--eval", "db.adminCommand('ping')"]
       interval: 5s
-      start_period: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   shard1_1:
     image: mongo:latest
@@ -49,9 +51,11 @@ services:
         "27021"
       ]
     healthcheck:
-      test: [ "CMD", "mongo", "--port", "27021", "--eval", "db.adminCommand('ping')" ]
+      test: ["CMD", "mongo", "--port", "27021", "--eval", "db.adminCommand('ping')"]
       interval: 5s
-      start_period: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   shard1_2:
     image: mongo:latest
@@ -74,9 +78,11 @@ services:
         "27022"
       ]
     healthcheck:
-      test: [ "CMD", "mongo", "--port", "27022", "--eval", "db.adminCommand('ping')" ]
+      test: ["CMD", "mongo", "--port", "27022", "--eval", "db.adminCommand('ping')"]
       interval: 5s
-      start_period: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   shard1_3:
     image: mongo:latest
@@ -99,9 +105,11 @@ services:
         "27023"
       ]
     healthcheck:
-      test: [ "CMD", "mongo", "--port", "27023", "--eval", "db.adminCommand('ping')" ]
+      test: ["CMD", "mongo", "--port", "27023", "--eval", "db.adminCommand('ping')"]
       interval: 5s
-      start_period: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   shard2_1:
     image: mongo:latest
@@ -124,9 +132,11 @@ services:
         "27031"
       ]
     healthcheck:
-      test: [ "CMD", "mongo", "--port", "27031", "--eval", "db.adminCommand('ping')" ]
+      test: ["CMD", "mongo", "--port", "27031", "--eval", "db.adminCommand('ping')"]
       interval: 5s
-      start_period: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   shard2_2:
     image: mongo:latest
@@ -149,9 +159,11 @@ services:
         "27032"
       ]
     healthcheck:
-      test: [ "CMD", "mongo", "--port", "27032", "--eval", "db.adminCommand('ping')" ]
+      test: ["CMD", "mongo", "--port", "27032", "--eval", "db.adminCommand('ping')"]
       interval: 5s
-      start_period: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   shard2_3:
     image: mongo:latest
@@ -174,9 +186,61 @@ services:
         "27033"
       ]
     healthcheck:
-      test: [ "CMD", "mongo", "--port", "27033", "--eval", "db.adminCommand('ping')" ]
+      test: ["CMD", "mongo", "--port", "27033", "--eval", "db.adminCommand('ping')"]
       interval: 5s
-      start_period: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  config_init:
+    image: mongo:latest
+    container_name: config_init
+    depends_on:
+      configSrv:
+        condition: service_healthy
+    networks:
+      app-network:
+        ipv4_address: 173.17.0.11
+    command: >
+      bash -c "until mongo --host configSrv --port 27017 --eval 'print(\"waited for connection\")';
+      do sleep 5; done &&
+      mongo --host configSrv --port 27017 --eval 'rs.initiate({_id: \"config_server\", configsvr: true, members: [{ _id: 0, host: \"configSrv:27017\" }]})'"
+
+  shard1_init:
+    image: mongo:latest
+    container_name: shard1_init
+    depends_on:
+      shard1_1:
+        condition: service_healthy
+      shard1_2:
+        condition: service_healthy
+      shard1_3:
+        condition: service_healthy
+    networks:
+      app-network:
+        ipv4_address: 173.17.0.24
+    command: >
+      bash -c "until mongo --host shard1_1 --port 27021 --eval 'print(\"waited for connection\")';
+      do sleep 5; done &&
+      mongo --host shard1_1 --port 27021 --eval 'rs.initiate({_id: \"shard1\", members: [{ _id: 0, host: \"shard1_1:27021\" }, { _id: 1, host: \"shard1_2:27022\" }, { _id: 2, host: \"shard1_3:27023\" }]})'"
+
+  shard2_init:
+    image: mongo:latest
+    container_name: shard2_init
+    depends_on:
+      shard2_1:
+        condition: service_healthy
+      shard2_2:
+        condition: service_healthy
+      shard2_3:
+        condition: service_healthy
+    networks:
+      app-network:
+        ipv4_address: 173.17.0.34
+    command: >
+      bash -c "until mongo --host shard2_1 --port 27031 --eval 'print(\"waited for connection\")';
+      do sleep 5; done &&
+      mongo --host shard2_1 --port 27031 --eval 'rs.initiate({_id: \"shard2\", members: [{ _id: 0, host: \"shard2_1:27031\" }, { _id: 1, host: \"shard2_2:27032\" }, { _id: 2, host: \"shard2_3:27033\" }]})'"
 
   mongos_router:
     image: mongo:latest
@@ -188,8 +252,12 @@ services:
       app-network:
         ipv4_address: 173.17.0.7
     depends_on:
-      configSrv:
-        condition: service_healthy
+      config_init:
+        condition: service_completed_successfully
+      shard1_init:
+        condition: service_completed_successfully
+      shard2_init:
+        condition: service_completed_successfully
     command:
       [
         "mongos",
@@ -200,9 +268,14 @@ services:
         "27020"
       ]
     healthcheck:
-      test: [ "CMD", "mongo", "--port", "27020", "--eval", "db.adminCommand('ping')" ]
-      interval: 5s
-      start_period: 10s
+      test: >
+        bash -c "mongo --port 27020 --eval 'sh.addShard(\"shard1/shard1_1:27021,shard1_2:27022,shard1_3:27023\");
+        sh.addShard(\"shard2/shard2_1:27031,shard2_2:27032,shard2_3:27033\");
+        db.adminCommand({listShards: 1})'"
+      interval: 10s
+      timeout: 30s
+      retries: 5
+      start_period: 60s
 
   redis:
     image: redis:latest
